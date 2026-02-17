@@ -6,6 +6,7 @@ Automated deployment scripts for running Proxmox VE in Docker containers with QE
 
 - **Interactive Resource Configuration** - Choose from presets (Conservative/Recommended/Maximum) or customize CPU, RAM, and disk allocation
 - **Automatic Resource Detection** - Detects system resources and calculates optimal allocations
+- **Dynamic IP Detection** - Automatically detects Proxmox VM IP and configures nginx proxy
 - **SSL-Enabled nginx Proxy** - Self-signed certificates with HTTPS support
 - **Firewall Configuration** - Automatic iptables rules for required ports
 - **Network Routing** - Docker bridge to VM network routing setup
@@ -107,8 +108,18 @@ nginx Proxy Container (SSL termination)
     ↓
 Proxmox QEMU Container (172.18.0.x)
     ↓
-Proxmox VM (172.30.0.4:8006)
+Proxmox VM (172.30.0.x:8006 - dynamically detected)
 ```
+
+### Dynamic IP Detection
+
+The Proxmox VM IP is **automatically detected** when the VM boots. The setup script:
+1. Waits for the VM to acquire an IP address (172.30.0.0/24 network)
+2. Detects the actual IP by querying the container's network interfaces
+3. Updates the nginx configuration with the correct IP
+4. Reloads nginx to apply the changes
+
+**This ensures the proxy always forwards to the correct IP**, even if it changes between deployments.
 
 ## 📝 Access URLs
 
@@ -116,9 +127,11 @@ After setup completes:
 
 - **Proxmox Web UI**: `https://YOUR_IP:8006` (HTTPS)
 - **Proxmox VNC Console**: `http://YOUR_IP:8008`
-- **Proxmox VM SSH**: `ssh root@172.30.0.4` (from host)
+- **Proxmox VM SSH**: `ssh root@<DETECTED_IP>` (from host)
 
-**Default Credentials**: Set during Proxmox installation
+**Note**: The Proxmox VM IP is displayed at the end of the setup. Check the generated `README.md` in your project directory for the exact IP.
+
+**Default Credentials**: Set during Proxmox installation  
 **Realm**: Linux PAM standard authentication
 
 ## 🛠️ Management

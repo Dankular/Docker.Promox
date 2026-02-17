@@ -15,3 +15,6 @@ vm-data/
 
 # Environment files
 .env
+
+# Template files (generated from .template)
+nginx-proxmox.conf

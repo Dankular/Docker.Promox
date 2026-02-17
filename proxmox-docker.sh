@@ -334,11 +334,11 @@ else
     echo -e "${GREEN}✓ SSL certificate already exists${NC}"
 fi
 
-# Create nginx configuration
-echo -e "${YELLOW}[7/14] Creating nginx configuration...${NC}"
-cat > nginx-proxmox.conf << 'NGINX_EOF'
+# Create nginx configuration template
+echo -e "${YELLOW}[7/14] Creating nginx configuration template...${NC}"
+cat > nginx-proxmox.conf.template << 'NGINX_EOF'
 upstream proxmox {
-    server 172.30.0.4:8006;
+    server PROXMOX_VM_IP_PLACEHOLDER:8006;
 }
 
 server {
@@ -364,7 +364,7 @@ server {
         
         # Cookie handling - rewrite domain from internal IP to public hostname
         proxy_cookie_path / /;
-        proxy_cookie_domain 172.30.0.4 $host;
+        proxy_cookie_domain PROXMOX_VM_IP_PLACEHOLDER $host;
         
         proxy_ssl_verify off;
         proxy_buffering off;
@@ -377,7 +377,10 @@ server {
     }
 }
 NGINX_EOF
-echo -e "${GREEN}✓ nginx configuration created${NC}"
+
+# Create initial nginx config with default IP (will be updated after VM boots)
+sed "s/PROXMOX_VM_IP_PLACEHOLDER/${PROXMOX_VM_IP}/g" nginx-proxmox.conf.template > nginx-proxmox.conf
+echo -e "${GREEN}✓ nginx configuration template created${NC}"
 
 # Create docker-compose.yml
 echo -e "${YELLOW}[8/14] Creating docker-compose.yml...${NC}"
@@ -450,9 +453,11 @@ Automated deployment of Proxmox Virtual Environment running in a QEMU Docker con
 
 - VPS Public IP: ${PUBLIC_IP}
 - Docker Bridge Network: 172.18.0.0/16
-- Proxmox Container IP: ${DOCKER_NETWORK_IP}
+- Proxmox Container IP: ${ACTUAL_CONTAINER_IP}
 - Proxmox VM Network: ${PROXMOX_VM_NETWORK}
-- Proxmox VM IP: ${PROXMOX_VM_IP}
+- Proxmox VM IP: ${PROXMOX_VM_IP} (dynamically detected)
+
+**Note**: The Proxmox VM IP is automatically detected when the VM boots and may differ from the default 172.30.0.4. The nginx reverse proxy is automatically configured with the correct IP address.
 
 ## Management Commands
 
@@ -596,7 +601,7 @@ echo -e "${YELLOW}[11/14] Waiting for containers to initialize (30 seconds)...${
 sleep 30
 
 # Detect actual container IP
-echo -e "${YELLOW}[12/14] Detecting Proxmox container IP...${NC}"
+echo -e "${YELLOW}[12/14] Detecting Proxmox container and VM IP addresses...${NC}"
 ACTUAL_CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' proxmox-qemu-vnc)
 if [ -z "$ACTUAL_CONTAINER_IP" ]; then
     echo -e "${RED}Warning: Could not detect container IP. Using default: ${DOCKER_NETWORK_IP}${NC}"
@@ -611,6 +616,42 @@ else
         docker compose up -d nginx-proxy
         echo -e "${GREEN}✓ nginx proxy updated with correct route${NC}"
     fi
+fi
+
+# Detect Proxmox VM IP (the VM running inside the container)
+echo -e "  ${BLUE}Waiting for Proxmox VM to boot and acquire IP address...${NC}"
+DETECTED_VM_IP=""
+MAX_ATTEMPTS=30
+ATTEMPT=0
+
+while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+    # Try to detect VM IP from container's network interfaces
+    DETECTED_VM_IP=$(docker exec proxmox-qemu-vnc ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)172\.30\.\d+\.\d+(?=/\d+)' | head -1)
+    
+    if [ -n "$DETECTED_VM_IP" ]; then
+        echo -e "  ${GREEN}✓ Detected Proxmox VM IP: ${DETECTED_VM_IP}${NC}"
+        break
+    fi
+    
+    ATTEMPT=$((ATTEMPT + 1))
+    if [ $((ATTEMPT % 5)) -eq 0 ]; then
+        echo -e "  ${YELLOW}Still waiting for VM to boot... (${ATTEMPT}/${MAX_ATTEMPTS})${NC}"
+    fi
+    sleep 2
+done
+
+# Update nginx config with detected VM IP
+if [ -n "$DETECTED_VM_IP" ]; then
+    PROXMOX_VM_IP="$DETECTED_VM_IP"
+    echo -e "  ${BLUE}Updating nginx configuration with VM IP: ${PROXMOX_VM_IP}${NC}"
+    sed "s/PROXMOX_VM_IP_PLACEHOLDER/${PROXMOX_VM_IP}/g" nginx-proxmox.conf.template > nginx-proxmox.conf
+    
+    # Reload nginx to apply new configuration
+    docker compose restart nginx-proxy
+    echo -e "  ${GREEN}✓ nginx configuration updated and reloaded${NC}"
+else
+    echo -e "  ${YELLOW}! Could not detect Proxmox VM IP, using default: ${PROXMOX_VM_IP}${NC}"
+    echo -e "  ${YELLOW}! You may need to update nginx-proxmox.conf manually after Proxmox boots${NC}"
 fi
 
 # Verify services
@@ -642,12 +683,19 @@ else
     echo -e "  ${GREEN}✓ Route already exists${NC}"
 fi
 
-# Test connectivity to Proxmox VM (will fail until Proxmox is installed, but that's ok)
-echo -e "  ${BLUE}Testing network connectivity...${NC}"
+# Test connectivity to Proxmox VM
+echo -e "  ${BLUE}Testing network connectivity to Proxmox VM...${NC}"
 if ping -c 1 -W 2 ${PROXMOX_VM_IP} >/dev/null 2>&1; then
     echo -e "  ${GREEN}✓ Proxmox VM is reachable at ${PROXMOX_VM_IP}${NC}"
+    
+    # Test if Proxmox web interface is responding
+    if timeout 5 bash -c "curl -k -s https://${PROXMOX_VM_IP}:8006 >/dev/null 2>&1"; then
+        echo -e "  ${GREEN}✓ Proxmox web interface is responding at https://${PROXMOX_VM_IP}:8006${NC}"
+    else
+        echo -e "  ${YELLOW}! Proxmox web interface not yet ready (may still be booting)${NC}"
+    fi
 else
-    echo -e "  ${YELLOW}! Proxmox VM not yet reachable (normal if not installed yet)${NC}"
+    echo -e "  ${YELLOW}! Proxmox VM not yet reachable at ${PROXMOX_VM_IP} (normal if not installed yet)${NC}"
 fi
 
 # Display firewall status
@@ -689,6 +737,7 @@ echo "  • Firewall ports opened: ${PROXMOX_WEB_PORT}, ${PROXMOX_VNC_PORT}, ${P
 echo "  • IP forwarding: Enabled"
 echo "  • VM network route: ${PROXMOX_VM_NETWORK} via ${ACTUAL_CONTAINER_IP}"
 echo "  • Container IP: ${ACTUAL_CONTAINER_IP}"
+echo "  • Proxmox VM IP: ${PROXMOX_VM_IP} (dynamically detected)"
 echo ""
 echo -e "${YELLOW}Important Notes:${NC}"
 echo ""
