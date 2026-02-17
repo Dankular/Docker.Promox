@@ -1,0 +1,58 @@
+services:
+  kali-qemu:
+    image: qemux/qemu
+    container_name: kali-qemu-vnc
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - 8005:8006
+      - 5901:5900
+    volumes:
+      - ./vm-data:/storage
+    restart: unless-stopped
+    stop_grace_period: 2m
+    environment:
+      - RAM_SIZE=4G
+      - CPU_CORES=2
+      - DISK_SIZE=64G
+
+  proxmox-qemu:
+    image: qemux/qemu
+    container_name: proxmox-qemu-vnc
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - 8008:8006
+      - 5900:5900
+    volumes:
+      - ./proxmox-data:/storage
+    restart: unless-stopped
+    stop_grace_period: 2m
+    environment:
+      - RAM_SIZE=6G
+      - CPU_CORES=4
+      - DISK_SIZE=128G
+
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: nginx-proxmox-proxy
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - 8006:8006
+    volumes:
+      - ./nginx-proxmox.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx-selfsigned.crt:/etc/nginx/ssl/nginx-selfsigned.crt:ro
+      - ./nginx-selfsigned.key:/etc/nginx/ssl/nginx-selfsigned.key:ro
+    restart: unless-stopped
+    depends_on:
+      - proxmox-qemu
+    command: sh -c "ip route add 172.30.0.0/24 via 172.18.0.3 && nginx -g 'daemon off;'"
+
+

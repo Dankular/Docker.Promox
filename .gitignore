@@ -1,0 +1,17 @@
+# SSL Certificates (generated, don't commit)
+*.crt
+*.key
+*.pem
+
+# VM Data (too large for git)
+proxmox-data/
+vm-data/
+
+# ISOs (too large for git)
+*.iso
+
+# Logs
+*.log
+
+# Environment files
+.env
