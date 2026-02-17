@@ -4,7 +4,8 @@ Automated deployment scripts for running Proxmox VE in Docker containers with QE
 
 ## 🚀 Features
 
-- **Automatic Resource Detection** - Intelligently allocates CPU, RAM, and disk based on host system
+- **Interactive Resource Configuration** - Choose from presets (Conservative/Recommended/Maximum) or customize CPU, RAM, and disk allocation
+- **Automatic Resource Detection** - Detects system resources and calculates optimal allocations
 - **SSL-Enabled nginx Proxy** - Self-signed certificates with HTTPS support
 - **Firewall Configuration** - Automatic iptables rules for required ports
 - **Network Routing** - Docker bridge to VM network routing setup
@@ -47,23 +48,35 @@ chmod +x proxmox-docker.sh
 | `docker-compose.yml` | Docker container orchestration template |
 | `SETUP-GUIDE.md` | Comprehensive setup and troubleshooting guide |
 
-## 💻 Resource Auto-Detection
+## 💻 Interactive Resource Configuration
 
-The setup script automatically detects and allocates:
+The setup script detects system resources and offers flexible allocation options:
 
-### CPU
-- **≤2 cores**: Allocate 2 cores
-- **3-4 cores**: Allocate total - 1
-- **5+ cores**: Allocate 75% of total
+### Configuration Modes
 
-### RAM
-- **≤8GB**: Allocate 4GB
-- **>8GB**: Allocate 75% (minimum 2GB reserved for host)
+**1. Conservative (50%)**
+- Leaves plenty of resources for host system
+- Ideal for shared servers or development
 
-### Disk
-- **<80GB available**: Allocate 64GB
-- **80-625GB**: Allocate 80%
-- **>625GB**: Cap at 500GB
+**2. Recommended (75%)** - Default
+- Balanced allocation for most use cases
+- Leaves adequate resources for host operations
+
+**3. Maximum (Nearly All)**
+- Allocates maximum resources to Proxmox
+- Ideal for dedicated virtualization servers
+
+**4. Custom**
+- Full control over each resource
+- CPU: Choose 1 to all cores
+- RAM: Specify in GB (e.g., 8G) or MB (e.g., 8192M)
+- Disk: Specify in GB (minimum 32GB)
+
+### Auto-Detection Logic
+
+**CPU**: Detects total cores via `nproc`  
+**RAM**: Reads from `/proc/meminfo` (displayed in GB and MB)  
+**Disk**: Checks available space in project directory
 
 ## 🔥 Firewall Management
 

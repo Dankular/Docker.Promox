@@ -37,7 +37,7 @@ if [ "$EUID" -eq 0 ]; then
 fi
 
 # Check prerequisites
-echo -e "${YELLOW}[1/13] Checking prerequisites...${NC}"
+echo -e "${YELLOW}[1/14] Checking prerequisites...${NC}"
 command -v docker >/dev/null 2>&1 || { echo -e "${RED}Docker is not installed. Aborting.${NC}" >&2; exit 1; }
 command -v docker-compose >/dev/null 2>&1 || command -v docker >/dev/null 2>&1 || { echo -e "${RED}Docker Compose is not available. Aborting.${NC}" >&2; exit 1; }
 command -v openssl >/dev/null 2>&1 || { echo -e "${RED}OpenSSL is not installed. Aborting.${NC}" >&2; exit 1; }
@@ -52,64 +52,205 @@ fi
 echo -e "${GREEN}✓ All prerequisites met${NC}"
 
 # Detect system resources
-echo -e "${YELLOW}[2/12] Detecting system resources...${NC}"
+echo -e "${YELLOW}[2/14] Detecting system resources...${NC}"
 
 # Detect CPU cores
 TOTAL_CORES=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo "4")
-# Allocate 75% of cores to Proxmox, minimum 2, maximum available-1
-if [ "$TOTAL_CORES" -le 2 ]; then
-    CPU_CORES=2
-elif [ "$TOTAL_CORES" -le 4 ]; then
-    CPU_CORES=$(($TOTAL_CORES - 1))
-else
-    CPU_CORES=$(($TOTAL_CORES * 3 / 4))
-fi
-echo -e "  ${BLUE}CPU Cores: ${TOTAL_CORES} detected → Allocating ${CPU_CORES} to Proxmox${NC}"
+echo -e "  ${GREEN}✓ CPU Cores: ${TOTAL_CORES} detected${NC}"
 
-# Detect RAM (in MB)
+# Detect RAM
 TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 TOTAL_RAM_GB=$(($TOTAL_RAM_KB / 1024 / 1024))
-# Allocate 75% of RAM to Proxmox, minimum 4GB, leave at least 2GB for host
-if [ "$TOTAL_RAM_GB" -le 8 ]; then
-    RAM_SIZE="4G"
-else
-    RAM_ALLOCATED_GB=$(($TOTAL_RAM_GB * 3 / 4))
-    # Cap at total - 2GB
-    if [ "$RAM_ALLOCATED_GB" -gt $(($TOTAL_RAM_GB - 2)) ]; then
-        RAM_ALLOCATED_GB=$(($TOTAL_RAM_GB - 2))
-    fi
-    RAM_SIZE="${RAM_ALLOCATED_GB}G"
-fi
-echo -e "  ${BLUE}RAM: ${TOTAL_RAM_GB}GB detected → Allocating ${RAM_SIZE} to Proxmox${NC}"
+TOTAL_RAM_MB=$(($TOTAL_RAM_KB / 1024))
+echo -e "  ${GREEN}✓ RAM: ${TOTAL_RAM_GB}GB (${TOTAL_RAM_MB}MB) detected${NC}"
 
-# Detect available disk space (in GB)
+# Detect available disk space
 if [ -d "$PROJECT_DIR" ]; then
     AVAILABLE_DISK=$(df -BG "$PROJECT_DIR" | tail -1 | awk '{print $4}' | sed 's/G//')
 else
     AVAILABLE_DISK=$(df -BG "$HOME" | tail -1 | awk '{print $4}' | sed 's/G//')
 fi
-# Allocate 80% of available space, minimum 64GB, maximum 500GB
-if [ "$AVAILABLE_DISK" -lt 80 ]; then
-    DISK_SIZE="64G"
-elif [ "$AVAILABLE_DISK" -gt 625 ]; then
-    DISK_SIZE="500G"
-else
-    DISK_ALLOCATED=$(($AVAILABLE_DISK * 4 / 5))
-    DISK_SIZE="${DISK_ALLOCATED}G"
-fi
-echo -e "  ${BLUE}Disk: ${AVAILABLE_DISK}GB available → Allocating ${DISK_SIZE} to Proxmox${NC}"
+echo -e "  ${GREEN}✓ Disk: ${AVAILABLE_DISK}GB available${NC}"
 
-echo -e "${GREEN}✓ Resource allocation calculated${NC}"
 echo ""
-echo -e "${YELLOW}Allocated Resources Summary:${NC}"
-echo -e "  CPU Cores: ${CPU_CORES}"
-echo -e "  RAM: ${RAM_SIZE}"
-echo -e "  Disk: ${DISK_SIZE}"
+echo -e "${YELLOW}[3/14] Interactive Resource Configuration${NC}"
+echo -e "${BLUE}============================================${NC}"
 echo ""
-read -p "Press Enter to continue or Ctrl+C to abort..."
+
+# Calculate preset allocations
+# Conservative: 50%
+if [ "$TOTAL_CORES" -le 2 ]; then
+    CONSERVATIVE_CPU=1
+else
+    CONSERVATIVE_CPU=$(($TOTAL_CORES / 2))
+fi
+CONSERVATIVE_RAM=$(($TOTAL_RAM_GB / 2))
+[ "$CONSERVATIVE_RAM" -lt 4 ] && CONSERVATIVE_RAM=4
+CONSERVATIVE_DISK=$(($AVAILABLE_DISK / 2))
+[ "$CONSERVATIVE_DISK" -lt 64 ] && CONSERVATIVE_DISK=64
+
+# Recommended: 75%
+if [ "$TOTAL_CORES" -le 2 ]; then
+    RECOMMENDED_CPU=2
+elif [ "$TOTAL_CORES" -le 4 ]; then
+    RECOMMENDED_CPU=$(($TOTAL_CORES - 1))
+else
+    RECOMMENDED_CPU=$(($TOTAL_CORES * 3 / 4))
+fi
+RECOMMENDED_RAM=$(($TOTAL_RAM_GB * 3 / 4))
+[ "$RECOMMENDED_RAM" -lt 4 ] && RECOMMENDED_RAM=4
+[ "$RECOMMENDED_RAM" -gt $(($TOTAL_RAM_GB - 2)) ] && RECOMMENDED_RAM=$(($TOTAL_RAM_GB - 2))
+RECOMMENDED_DISK=$(($AVAILABLE_DISK * 4 / 5))
+[ "$RECOMMENDED_DISK" -lt 64 ] && RECOMMENDED_DISK=64
+[ "$RECOMMENDED_DISK" -gt 500 ] && RECOMMENDED_DISK=500
+
+# Maximum: All available (leave 1 core, 2GB RAM)
+MAXIMUM_CPU=$(($TOTAL_CORES - 1))
+[ "$MAXIMUM_CPU" -lt 2 ] && MAXIMUM_CPU=$TOTAL_CORES
+MAXIMUM_RAM=$(($TOTAL_RAM_GB - 2))
+[ "$MAXIMUM_RAM" -lt 4 ] && MAXIMUM_RAM=$TOTAL_RAM_GB
+MAXIMUM_DISK=$(($AVAILABLE_DISK - 10))
+[ "$MAXIMUM_DISK" -lt 64 ] && MAXIMUM_DISK=$AVAILABLE_DISK
+
+echo -e "${YELLOW}Choose Resource Allocation Preset:${NC}"
+echo ""
+echo -e "  ${BLUE}1) Conservative (50%)${NC}"
+echo -e "     CPU: ${CONSERVATIVE_CPU} cores | RAM: ${CONSERVATIVE_RAM}GB | Disk: ${CONSERVATIVE_DISK}GB"
+echo ""
+echo -e "  ${BLUE}2) Recommended (75%) - Default${NC}"
+echo -e "     CPU: ${RECOMMENDED_CPU} cores | RAM: ${RECOMMENDED_RAM}GB | Disk: ${RECOMMENDED_DISK}GB"
+echo ""
+echo -e "  ${BLUE}3) Maximum (Nearly All)${NC}"
+echo -e "     CPU: ${MAXIMUM_CPU} cores | RAM: ${MAXIMUM_RAM}GB | Disk: ${MAXIMUM_DISK}GB"
+echo ""
+echo -e "  ${BLUE}4) Custom - Configure each resource manually${NC}"
+echo ""
+read -p "Select preset [1-4] (default: 2): " PRESET_CHOICE
+
+# Set defaults based on choice
+case "$PRESET_CHOICE" in
+    1)
+        CPU_CORES=$CONSERVATIVE_CPU
+        RAM_SIZE="${CONSERVATIVE_RAM}G"
+        DISK_SIZE="${CONSERVATIVE_DISK}G"
+        echo -e "${GREEN}✓ Using Conservative preset${NC}"
+        ;;
+    3)
+        CPU_CORES=$MAXIMUM_CPU
+        RAM_SIZE="${MAXIMUM_RAM}G"
+        DISK_SIZE="${MAXIMUM_DISK}G"
+        echo -e "${GREEN}✓ Using Maximum preset${NC}"
+        ;;
+    4)
+        echo ""
+        echo -e "${YELLOW}Custom Configuration:${NC}"
+        echo ""
+        
+        # CPU Configuration
+        echo -e "${BLUE}CPU Configuration:${NC}"
+        echo -e "  Total available: ${TOTAL_CORES} cores"
+        echo -e "  Recommended: ${RECOMMENDED_CPU} cores"
+        while true; do
+            read -p "Enter CPU cores for Proxmox [1-${TOTAL_CORES}] (default: ${RECOMMENDED_CPU}): " CUSTOM_CPU
+            CUSTOM_CPU=${CUSTOM_CPU:-$RECOMMENDED_CPU}
+            if [[ "$CUSTOM_CPU" =~ ^[0-9]+$ ]] && [ "$CUSTOM_CPU" -ge 1 ] && [ "$CUSTOM_CPU" -le "$TOTAL_CORES" ]; then
+                CPU_CORES=$CUSTOM_CPU
+                break
+            else
+                echo -e "${RED}Invalid input. Enter a number between 1 and ${TOTAL_CORES}${NC}"
+            fi
+        done
+        
+        # RAM Configuration
+        echo ""
+        echo -e "${BLUE}RAM Configuration:${NC}"
+        echo -e "  Total available: ${TOTAL_RAM_GB}GB (${TOTAL_RAM_MB}MB)"
+        echo -e "  Recommended: ${RECOMMENDED_RAM}GB"
+        echo -e "  Enter in GB (e.g., 8) or MB (e.g., 8192M)"
+        while true; do
+            read -p "Enter RAM for Proxmox (default: ${RECOMMENDED_RAM}G): " CUSTOM_RAM
+            CUSTOM_RAM=${CUSTOM_RAM:-${RECOMMENDED_RAM}G}
+            
+            # Parse input (supports 8G, 8192M, 8, etc.)
+            if [[ "$CUSTOM_RAM" =~ ^([0-9]+)([GMgm]?)$ ]]; then
+                RAM_VALUE="${BASH_REMATCH[1]}"
+                RAM_UNIT="${BASH_REMATCH[2]}"
+                
+                # Convert to MB for validation
+                if [[ "${RAM_UNIT^^}" == "G" ]] || [[ -z "$RAM_UNIT" ]]; then
+                    RAM_MB=$(($RAM_VALUE * 1024))
+                    RAM_SIZE="${RAM_VALUE}G"
+                else
+                    RAM_MB=$RAM_VALUE
+                    RAM_SIZE="${RAM_VALUE}M"
+                fi
+                
+                # Validate
+                if [ "$RAM_MB" -ge 2048 ] && [ "$RAM_MB" -le "$TOTAL_RAM_MB" ]; then
+                    break
+                else
+                    echo -e "${RED}Invalid RAM. Must be between 2GB and ${TOTAL_RAM_GB}GB${NC}"
+                fi
+            else
+                echo -e "${RED}Invalid format. Use: 8G or 8192M${NC}"
+            fi
+        done
+        
+        # Disk Configuration
+        echo ""
+        echo -e "${BLUE}Disk Configuration:${NC}"
+        echo -e "  Total available: ${AVAILABLE_DISK}GB"
+        echo -e "  Recommended: ${RECOMMENDED_DISK}GB"
+        echo -e "  Enter in GB (e.g., 128)"
+        while true; do
+            read -p "Enter Disk size for Proxmox (default: ${RECOMMENDED_DISK}G): " CUSTOM_DISK
+            CUSTOM_DISK=${CUSTOM_DISK:-$RECOMMENDED_DISK}
+            
+            # Parse input (supports 128G, 128, etc.)
+            if [[ "$CUSTOM_DISK" =~ ^([0-9]+)([Gg]?)$ ]]; then
+                DISK_VALUE="${BASH_REMATCH[1]}"
+                DISK_SIZE="${DISK_VALUE}G"
+                
+                # Validate
+                if [ "$DISK_VALUE" -ge 32 ] && [ "$DISK_VALUE" -le "$AVAILABLE_DISK" ]; then
+                    break
+                else
+                    echo -e "${RED}Invalid disk size. Must be between 32GB and ${AVAILABLE_DISK}GB${NC}"
+                fi
+            else
+                echo -e "${RED}Invalid format. Use: 128G or 128${NC}"
+            fi
+        done
+        
+        echo -e "${GREEN}✓ Custom configuration complete${NC}"
+        ;;
+    *)
+        # Default to Recommended
+        CPU_CORES=$RECOMMENDED_CPU
+        RAM_SIZE="${RECOMMENDED_RAM}G"
+        DISK_SIZE="${RECOMMENDED_DISK}G"
+        echo -e "${GREEN}✓ Using Recommended preset (default)${NC}"
+        ;;
+esac
+
+echo ""
+echo -e "${BLUE}============================================${NC}"
+echo -e "${YELLOW}Final Resource Allocation:${NC}"
+echo -e "${BLUE}============================================${NC}"
+echo -e "  CPU Cores: ${GREEN}${CPU_CORES}${NC} / ${TOTAL_CORES}"
+echo -e "  RAM:       ${GREEN}${RAM_SIZE}${NC} / ${TOTAL_RAM_GB}GB"
+echo -e "  Disk:      ${GREEN}${DISK_SIZE}${NC} / ${AVAILABLE_DISK}GB"
+echo -e "${BLUE}============================================${NC}"
+echo ""
+read -p "Proceed with this configuration? [Y/n]: " CONFIRM
+if [[ "$CONFIRM" =~ ^[Nn] ]]; then
+    echo -e "${RED}Setup cancelled.${NC}"
+    exit 0
+fi
+echo -e "${GREEN}✓ Configuration confirmed${NC}"
 
 # Configure firewall and IP forwarding
-echo -e "${YELLOW}[3/12] Configuring firewall rules...${NC}"
+echo -e "${YELLOW}[4/14] Configuring firewall rules...${NC}"
 
 # Check if we need sudo
 SUDO=""
@@ -176,13 +317,13 @@ fi
 echo -e "${GREEN}✓ Firewall configuration complete${NC}"
 
 # Create project directory
-echo -e "${YELLOW}[4/12] Creating project directory: $PROJECT_DIR${NC}"
+echo -e "${YELLOW}[5/14] Creating project directory: $PROJECT_DIR${NC}"
 mkdir -p "$PROJECT_DIR"
 cd "$PROJECT_DIR"
 echo -e "${GREEN}✓ Directory created${NC}"
 
 # Generate self-signed SSL certificate
-echo -e "${YELLOW}[5/12] Generating self-signed SSL certificate...${NC}"
+echo -e "${YELLOW}[6/14] Generating self-signed SSL certificate...${NC}"
 if [ ! -f "nginx-selfsigned.crt" ] || [ ! -f "nginx-selfsigned.key" ]; then
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout nginx-selfsigned.key \
@@ -194,7 +335,7 @@ else
 fi
 
 # Create nginx configuration
-echo -e "${YELLOW}[6/12] Creating nginx configuration...${NC}"
+echo -e "${YELLOW}[7/14] Creating nginx configuration...${NC}"
 cat > nginx-proxmox.conf << 'NGINX_EOF'
 upstream proxmox {
     server 172.30.0.4:8006;
@@ -239,7 +380,7 @@ NGINX_EOF
 echo -e "${GREEN}✓ nginx configuration created${NC}"
 
 # Create docker-compose.yml
-echo -e "${YELLOW}[7/12] Creating docker-compose.yml...${NC}"
+echo -e "${YELLOW}[8/14] Creating docker-compose.yml...${NC}"
 cat > docker-compose.yml << COMPOSE_EOF
 services:
   proxmox-qemu:
@@ -281,7 +422,7 @@ COMPOSE_EOF
 echo -e "${GREEN}✓ docker-compose.yml created${NC}"
 
 # Create README
-echo -e "${YELLOW}[8/12] Creating README.md...${NC}"
+echo -e "${YELLOW}[9/14] Creating README.md...${NC}"
 cat > README.md << README_EOF
 # Proxmox VE in Docker with QEMU
 
@@ -446,16 +587,16 @@ README_EOF
 echo -e "${GREEN}✓ README.md created${NC}"
 
 # Start containers
-echo -e "${YELLOW}[9/12] Starting Docker containers...${NC}"
+echo -e "${YELLOW}[10/14] Starting Docker containers...${NC}"
 docker compose up -d
 echo -e "${GREEN}✓ Containers started${NC}"
 
 # Wait for containers to be ready
-echo -e "${YELLOW}[10/12] Waiting for containers to initialize (30 seconds)...${NC}"
+echo -e "${YELLOW}[11/14] Waiting for containers to initialize (30 seconds)...${NC}"
 sleep 30
 
 # Detect actual container IP
-echo -e "${YELLOW}[11/12] Detecting Proxmox container IP...${NC}"
+echo -e "${YELLOW}[12/14] Detecting Proxmox container IP...${NC}"
 ACTUAL_CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' proxmox-qemu-vnc)
 if [ -z "$ACTUAL_CONTAINER_IP" ]; then
     echo -e "${RED}Warning: Could not detect container IP. Using default: ${DOCKER_NETWORK_IP}${NC}"
@@ -473,7 +614,7 @@ else
 fi
 
 # Verify services
-echo -e "${YELLOW}[12/12] Verifying services...${NC}"
+echo -e "${YELLOW}[13/14] Verifying services...${NC}"
 sleep 5
 
 # Check if containers are running
@@ -490,7 +631,7 @@ else
 fi
 
 # Configure host routing for Proxmox VM network access
-echo -e "${YELLOW}[13/13] Configuring network routing...${NC}"
+echo -e "${YELLOW}[14/14] Configuring network routing...${NC}"
 
 # Check if route already exists
 if ! ip route | grep -q "${PROXMOX_VM_NETWORK}"; then

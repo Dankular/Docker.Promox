@@ -34,17 +34,18 @@ chmod +x proxmox-docker.sh
 The script will:
 1. ✓ Check prerequisites (Docker, OpenSSL, iptables)
 2. ✓ **Auto-detect system resources** (CPU, RAM, disk)
-3. ✓ Configure firewall rules
-4. ✓ Create project directory
-5. ✓ Generate SSL certificates
-6. ✓ Create nginx configuration
-7. ✓ Create docker-compose.yml
-8. ✓ Create README documentation
-9. ✓ Start Docker containers
-10. ✓ Wait for initialization
-11. ✓ Detect container IP
-12. ✓ Verify services
-13. ✓ Configure network routing
+3. ✓ **Interactive configuration** - Choose preset or customize resources
+4. ✓ Configure firewall rules
+5. ✓ Create project directory
+6. ✓ Generate SSL certificates
+7. ✓ Create nginx configuration
+8. ✓ Create docker-compose.yml
+9. ✓ Create README documentation
+10. ✓ Start Docker containers
+11. ✓ Wait for initialization
+12. ✓ Detect container IP
+13. ✓ Verify services
+14. ✓ Configure network routing
 
 ### 3. Access Your Proxmox Installation
 
@@ -63,32 +64,50 @@ Access Information:
     ssh root@172.30.0.4
 ```
 
-## 💻 Resource Auto-Detection
+## 💻 Interactive Resource Configuration
 
-The script automatically detects and allocates system resources:
+The script detects system resources and offers **4 configuration modes**:
 
-### CPU Allocation
-- **2 cores or less**: Allocate 2 cores
-- **3-4 cores**: Allocate all cores - 1
-- **5+ cores**: Allocate 75% of cores
+### 1. Conservative (50%)
+Leaves half of resources for host system:
+- **CPU**: 50% of cores
+- **RAM**: 50% of total (min 4GB)
+- **Disk**: 50% of available (min 64GB)
 
-**Example:** 6 cores detected → 4 cores allocated to Proxmox
+**Example:** 6 cores, 12GB RAM, 100GB disk → 3 cores, 6GB, 50GB
 
-### RAM Allocation
-- **8GB or less**: Allocate 4GB
-- **More than 8GB**: Allocate 75% of total RAM
-- **Always leaves**: Minimum 2GB for host system
+### 2. Recommended (75%) - Default
+Balanced allocation for most use cases:
+- **CPU**: 75% of cores (or total-1 for ≤4 cores)
+- **RAM**: 75% of total (always leaves 2GB for host)
+- **Disk**: 80% of available (capped at 500GB)
 
-**Example:** 12GB detected → 9GB allocated to Proxmox
+**Example:** 6 cores, 12GB RAM, 100GB disk → 4 cores, 9GB, 80GB
 
-### Disk Allocation
-- **Less than 80GB available**: Allocate 64GB
-- **80GB - 625GB**: Allocate 80% of available space
-- **More than 625GB**: Cap at 500GB
+### 3. Maximum (Nearly All)
+Dedicates almost everything to Proxmox:
+- **CPU**: All cores - 1 (or all for ≤2 cores)
+- **RAM**: Total - 2GB (or total for ≤6GB)
+- **Disk**: Total - 10GB
 
-**Example:** 27GB available → 21GB allocated to Proxmox
+**Example:** 6 cores, 12GB RAM, 100GB disk → 5 cores, 10GB, 90GB
 
-**Note:** The script shows calculated values and pauses for confirmation before proceeding.
+### 4. Custom Configuration
+Full manual control:
+- **CPU**: Enter cores (1 to max detected)
+- **RAM**: Enter as GB (8G) or MB (8192M)
+- **Disk**: Enter in GB (minimum 32GB)
+
+**Interactive prompts with validation** ensure valid configurations.
+
+### Detection Process
+
+The script automatically detects:
+1. **CPU Cores**: Via `nproc` command
+2. **Total RAM**: From `/proc/meminfo` (shown in GB and MB)
+3. **Available Disk**: From `df` in project directory
+
+After showing detected values, you choose a preset or customize each resource individually.
 
 ## 🔥 Firewall Management
 
